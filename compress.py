@@ -1,11 +1,13 @@
+import os
 import math
 import glob
 import torch
 import torch.nn.functional as F
 
 from PIL import Image
-from torchvision import transforms
 from DiT_IC import DiT_IC
+from torchvision import transforms
+from utils.compress_utils import *
 
 
 # 单张图片加载和预处理
@@ -14,9 +16,24 @@ def load_img(img_path, transform):
     img_tensor = transform(img)
     return img_tensor
 
-def compress_one_img(net, img)
+# 单图片编码
+def compress_one_img(net, img, bin_path, img_name, ori_h, ori_w):
+    img_bin = os.path.join(bin_path, img_name + ".bin")
+    compress_dict = net.compress(img)
 
-def main(dataset_path):
+    with open(img_bin, "wb") as f:
+        write_body(f, 
+                    compress_dict["z_shape"], 
+                    compress_dict["strings"]
+                    ) 
+    size = os.path.getsize(img_bin)
+    bpp = float(size)*8 / float(ori_h*ori_w)
+
+    return bpp
+    
+
+
+def main(dataset_path, bin_path):
     imgs_path = glob.glob(dataset_path + "/*.png")
     print(f"Find total: {len(imgs_path)} images.")
 
@@ -29,12 +46,24 @@ def main(dataset_path):
     net.eval().cuda()
 
     for img_path in imgs_path:
+        _, img_name_ex = os.path.split(img_path) # 返回 目录、含后缀文件名
+        name, _ = os.path.splitext(img_name_ex)
         img = load_img(img_path, transform).unsqueeze(0)
 
         # pad
-        _, _, h, w = img.shape
-        h_pad = math.ceil(h/256)*256 - h # ceil向上取整
-        w_pad = math.ceil(w/256)*256 - w
-        img = F.pad(img,(0, w_pad, 0, h_pad), mode='reflect')
+        _, _, ori_h, ori_w = img.shape
+        h_pad = math.ceil(ori_h/256)*256 - ori_h # ceil向上取整
+        w_pad = math.ceil(ori_w/256)*256 - ori_w
+        img_pad = F.pad(img,(0, w_pad, 0, h_pad), mode='reflect')
+
+        bpp = compress_one_img(net, img_pad, bin_path, name, ori_h, ori_w)
+        print(f"{img_name_ex} bpp = {bpp:.5f}")
+
+
+
+
+if __name__ == '__main__':
+    dataset_path =  "/hdd/u202411103070/projects/datasets/Kodak/"
+    bin_path = "/hdd/u202411103070/projects/img_research/mini_dit_codec/output/bin/"
 
 
