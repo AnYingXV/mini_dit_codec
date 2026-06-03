@@ -1,6 +1,9 @@
 import torch 
 import torch.nn as nn
 
+from compressai.entropy_models import EntropyBottleneck, GaussianConditional
+from utils_modules.modules import DepthConvBlock, ResidualBlockUpsample2, ResidualBlockWithStride2
+
 
 # 创新点————时间步自适应预测
 class SynthesisTransform2(nn.Module):
@@ -41,7 +44,7 @@ class Upsample(nn.Module):
 
     def forward(self, x):
         return self.up(x)
-
+# ga
 class AnalysisTransform(nn.Module):
     def __init__(self, ch_emd=32, channel=320):
         super().__init__()
@@ -64,7 +67,7 @@ class AnalysisTransform(nn.Module):
         x = torch.cat((self.pre1(latent), self.pre2(latent2)), dim=1)
         x = self.analysis_transform(x)
         return x
-
+# gs
 class SynthesisTransform(nn.Module):
     def __init__(self, channel=320, channel_out=32) -> None:
         super().__init__()
@@ -79,7 +82,7 @@ class SynthesisTransform(nn.Module):
     def forward(self, x):
         x = self.synthesis_transform(x)
         return x
-
+# D_aux
 class AuxDecoder(nn.Module):
     def __init__(self, ch_emd=32, channel=320) -> None:
         super().__init__()
@@ -93,7 +96,7 @@ class AuxDecoder(nn.Module):
     def forward(self, x):
         x = self.block(x)
         return x
-
+# ha
 class HyperAnalysis(nn.Module):
     def __init__(self, channel=320) -> None:
         super().__init__()
@@ -107,7 +110,7 @@ class HyperAnalysis(nn.Module):
     def forward(self, x):
         x = self.reduction(x)
         return x
-
+# hs
 class HyperSynthesis(nn.Module):
     def __init__(self, channel=320) -> None:
         super().__init__()
@@ -186,5 +189,51 @@ class LRP(nn.Module):
     def forward(self, x):
         return self.block(x)
 
+class latent_codec(nn.Module):
+    def __init__(self,):
+        super(latent_codec, self).__init__()
+        self.ga = AnalysisTransform()
+        self.ha = HyperAnalysis()
+        self.entropybottleneck = EntropyBottleneck()
 
-class latent_codec(nn.Module)
+    def get_mask(self, b, c, h, w, device="cuda"):
+        patch0 = torch.tensor(((1., 0.), (0., 0.)), device = device) # 加上"."，用浮点型，而不是整型
+        mask0 = patch0.repeat((h+1)//2, (w+1)//2)
+        mask0 = mask0[:h, :w]
+        mask0 = mask0.unsqueeze(0).unsqueeze(0)
+        mask0 = mask0.expand(b, c//4, -1, -1)
+
+        patch1 = torch.tensor(((0., 1.), (0., 0.)), device = device) 
+        mask1 = patch1.repeat((h+1)//2, (w+1)//2)
+        mask1 = mask1[:h, :w]
+        mask1 = mask1.unsqueeze(0).unsqueeze(0)
+        mask1 = mask1.expand(b, c//4, -1, -1)
+
+        patch2 = torch.tensor(((0., 0.), (1., 0.)), device = device) 
+        mask2 = patch2.repeat((h+1)//2, (w+1)//2)
+        mask2 = mask2[:h, :w]
+        mask2 = mask2.unsqueeze(0).unsqueeze(0)
+        mask2 = mask2.expand(b, c//4, -1, -1)
+
+        patch3 = torch.tensor(((0., 0.), (0., 1.)), device = device) 
+        mask3 = patch3.repeat((h+1)//2, (w+1)//2)
+        mask3 = mask3[:h, :w]
+        mask3 = mask3.unsqueeze(0).unsqueeze(0)
+        mask3 = mask3.expand(b, c//4, -1, -1)
+
+        mask_0 = torch.cat((mask0, mask1, mask2, mask3), dim = 1)
+        mask_1 = torch.cat((mask1, mask2, mask3, mask0), dim = 1)
+        mask_2 = torch.cat((mask2, mask3, mask0, mask1), dim = 1)
+        mask_3 = torch.cat((mask3, mask0, mask1, mask2), dim = 1)
+
+        return mask_0, mask_1, mask_2, mask_3
+
+
+    def compress(self, latent1, latent2):
+        y = self.ga(latent1, latent2)
+        z = self.ha(y)
+        z_strings = self.entropybottleneck.compress(z)
+
+        # 获取mask
+        b, c, h, w = y.shape
+        mask0, mask1, mask2, mask3 = get_mask(b, c, h, w)

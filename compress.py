@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from PIL import Image
 from DiT_IC import DiT_IC
 from torchvision import transforms
-from utils.compress_utils import *
+from utils_modules.compress_utils import *
 
 
 # 单张图片加载和预处理
