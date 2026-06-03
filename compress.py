@@ -63,7 +63,7 @@ def main(dataset_path, bin_path):
 
 
 if __name__ == '__main__':
-    dataset_path =  "/hdd/u202411103070/projects/datasets/Kodak/"
-    bin_path = "/hdd/u202411103070/projects/img_research/mini_dit_codec/output/bin/"
+    dataset_path =  "/datasets/Kodak/"
+    bin_path = "/img_research/mini_dit_codec/output/bin/"
 
 

@@ -40,4 +40,4 @@ class DiT_IC(nn.Module):
 
 
 if __name__ == '__main__':
-    elic_path = "/hdd/u202411103070/projects/img_research/StableCodec/ELIC/elic_official.pth"
+    elic_path = "/img_research/StableCodec/ELIC/elic_official.pth"

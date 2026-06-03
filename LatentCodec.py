@@ -190,11 +190,18 @@ class LRP(nn.Module):
         return self.block(x)
 
 class latent_codec(nn.Module):
-    def __init__(self,):
+    def __init__(self, ch_emd=32, channel=320, channel_out=320):
         super(latent_codec, self).__init__()
-        self.ga = AnalysisTransform()
-        self.ha = HyperAnalysis()
-        self.entropybottleneck = EntropyBottleneck()
+        context_dim = channel * 2
+        self.ga = AnalysisTransform(ch_emd, channel)
+        self.gs = SynthesisTransform(channel, channel_out)
+        self.gc = SpatialContext(in_ch=context_dim)
+        self.ha = HyperAnalysis(channel)
+        self.hs = HyperSynthesis(channel)
+        self.entropybottleneck = EntropyBottleneck(channel//2)
+        self.gaussianconditional = GaussianConditional(None)
+        self.adapters_in = nn.ModuleList(Adapter(in_ch=channel, out_ch=context_dim) for i in range(4))
+        self.adapters_out = nn.ModuleList(Adapter(in_ch=context_dim, out_ch=channel * 2) for i in range(4))
 
     def get_mask(self, b, c, h, w, device="cuda"):
         patch0 = torch.tensor(((1., 0.), (0., 0.)), device = device) # 加上"."，用浮点型，而不是整型
@@ -233,7 +240,18 @@ class latent_codec(nn.Module):
         y = self.ga(latent1, latent2)
         z = self.ha(y)
         z_strings = self.entropybottleneck.compress(z)
+        z_hat = self.entropybottleneck.decompress(z_strings, z.size()[-2:])
+
+        cdf = self.gaussianconditional.quantized_cdf.tolist()
+        cdf_length = self.gaussianconditional.cdf_length.reshape(-1).int().tolist()
+        offsets = self.gaussianconditional.offset.reshape(-1).int.tolist()
+
 
         # 获取mask
         b, c, h, w = y.shape
         mask0, mask1, mask2, mask3 = get_mask(b, c, h, w)
+
+        # mean用来计算量化残差，scale用来选CDF表
+        base = self.hs(z_hat)
+        mean_0, scale_0 = self.adapter_out[0](self.gc(adapter_in[0](base))).chunk(2, 1)
+
