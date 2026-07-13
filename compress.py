@@ -16,10 +16,12 @@ def load_img(img_path, transform):
     img_tensor = transform(img)
     return img_tensor
 
-# 单图片编码
+
+# 单图片编码√
 def compress_one_img(net, img, bin_path, img_name, ori_h, ori_w):
     img_bin = os.path.join(bin_path, img_name + ".bin")
-    compress_dict = net.compress(img)
+    with torch.no_grad(): 
+        compress_dict = net.compress(img)
 
     with open(img_bin, "wb") as f:
         write_body(f, 
@@ -29,8 +31,14 @@ def compress_one_img(net, img, bin_path, img_name, ori_h, ori_w):
     size = os.path.getsize(img_bin)
     bpp = float(size)*8 / float(ori_h*ori_w)
 
-    return bpp
+    return bpp, img_bin
     
+# 单图片解码
+def decompress_one_img(net, img_bin, img_name):
+    with open(img_bin, "rb") as f:
+        strings, z_shape = read_body(f)
+    with torch.no_grad():
+        out_img = net.decompress()
 
 
 def main(dataset_path, bin_path):
@@ -45,6 +53,7 @@ def main(dataset_path, bin_path):
     net = DiT_IC()
     net.eval().cuda()
 
+    # 逐张进行
     for img_path in imgs_path:
         _, img_name_ex = os.path.split(img_path) # 返回 目录、含后缀文件名
         name, _ = os.path.splitext(img_name_ex)
@@ -56,8 +65,12 @@ def main(dataset_path, bin_path):
         w_pad = math.ceil(ori_w/256)*256 - ori_w
         img_pad = F.pad(img,(0, w_pad, 0, h_pad), mode='reflect')
 
-        bpp = compress_one_img(net, img_pad, bin_path, name, ori_h, ori_w)
+        # compress
+        bpp, img_bin = compress_one_img(net, img_pad, bin_path, name, ori_h, ori_w)
         print(f"{img_name_ex} bpp = {bpp:.5f}")
+
+        # decompress
+        out_img = decompress_one_img()
 
 
 

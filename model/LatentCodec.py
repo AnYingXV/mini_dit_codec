@@ -205,9 +205,8 @@ class latent_codec(nn.Module):
         self.adapters_out = nn.ModuleList(Adapter(in_ch=context_dim, out_ch=channel * 2) for i in range(4))
         self.LRP = nn.ModuleList(LRP(in_ch=context_dim, out_ch=channel) for i in range(4))
 
-        
 
-    # 获取掩码
+    # 获取掩码√
     def get_mask(self, b, c, h, w, device="cuda"):
         patch0 = torch.tensor(((1., 0.), (0., 0.)), device = device) # 加上"."，用浮点型，而不是整型
         mask0 = patch0.repeat((h+1)//2, (w+1)//2)
@@ -240,33 +239,33 @@ class latent_codec(nn.Module):
 
         return mask_0, mask_1, mask_2, mask_3
 
-    # 压缩通道
+    # 压缩通道√
     def squeeze_with_mask(self, sth, mask):
         sth0, sth1, sth2, sth3 = sth.chunk(4, 1)
         mask0, mask1, mask2, mask3 = mask.chunk(4, 1)
         squeezed = sth0*mask0 + sth1*mask1 + sth2*mask2 + sth3*mask3
         return squeezed
     
-    # 恢复通道
-    def unsqueeze_with_mask(self, sth, mask):
+    # 恢复通道√
+    def unsqueeze_with_mask(self, squeezed_sth, mask):
         mask0, mask1, mask2, mask3 = mask.chunk(4, 1)
-        unsqueezed = torch.cat((sth*mask0, sth*mask1, sth*mask2, sth*mask3), dim = 1)
+        unsqueezed = torch.cat((squeezed_sth*mask0, squeezed_sth*mask1, squeezed_sth*mask2, squeezed_sth*mask3), dim = 1)
         return unsqueezed
 
     # 得到待编码的量化残差、用于编码的cdf索引、返回用于下一步预测的y_hat
     # 此时传入的latent, means, scales都是完整的，而非经过对应mask处理后的稀疏的
     def prepare_encode(self, entropy_model, latent, means, scales, mask, cdf_list, symbol_list): 
-        squ_means = self.squeeze_with_mask(means, mask)
-        squ_scales = self.squeeze_with_mask(scales, mask)
-        squ_latent = self.squeeze_with_mask(latent, mask)
+        squeeze_means = self.squeeze_with_mask(means, mask)
+        squeeze_scales = self.squeeze_with_mask(scales, mask)
+        squeeze_latent = self.squeeze_with_mask(latent, mask)
 
-        cdf_indexs = entropy_model.build_indexes(squ_scales)
+        cdf_indexs = entropy_model.build_indexes(squeeze_scales)
         cdf_list.extend(cdf_indexs.reshape(-1).tolist())
-        quantized_res = entropy_model.quantize(squ_latent, "symbols", squ_means)
+        quantized_res = entropy_model.quantize(squeeze_latent, "symbols", squeeze_means)
         symbol_list.extend(quantized_res.reshape(-1).tolist())
 
-        y_hat = self.unsqueeze_with_mask(squ_means + quantized_res, mask)
-        return y_hat
+        y_hat = self.unsqueeze_with_mask(squeeze_means + quantized_res, mask)
+        return y_hat # 得到的是单步对应的y_hat
 
     def compress(self, latent1, latent2):
         y = self.ga(latent1, latent2)
@@ -326,6 +325,6 @@ class latent_codec(nn.Module):
 
         return {
             "strings" : [y_strings, z_strings],
-            "z_shape" : z.size()[-2:],
+            "shape" : z.size()[-2:],
         }
         
