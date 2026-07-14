@@ -38,6 +38,8 @@ class DiT_IC(nn.Module):
 
         return compress_dict # strings(列表中的列表)/z_shape："strings": [y_strings, z_strings],"z_shape": z_shape
 
+    def decompress(self, )
+
 
 if __name__ == '__main__':
     elic_path = "/img_research/StableCodec/ELIC/elic_official.pth"

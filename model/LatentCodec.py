@@ -204,6 +204,8 @@ class latent_codec(nn.Module):
         self.adapters_in = nn.ModuleList(Adapter(in_ch=channel, out_ch=context_dim) for i in range(4))
         self.adapters_out = nn.ModuleList(Adapter(in_ch=context_dim, out_ch=channel * 2) for i in range(4))
         self.LRP = nn.ModuleList(LRP(in_ch=context_dim, out_ch=channel) for i in range(4))
+     
+        
 
 
     # 获取掩码√
@@ -254,18 +256,30 @@ class latent_codec(nn.Module):
 
     # 得到待编码的量化残差、用于编码的cdf索引、返回用于下一步预测的y_hat
     # 此时传入的latent, means, scales都是完整的，而非经过对应mask处理后的稀疏的
-    def prepare_encode(self, entropy_model, latent, means, scales, mask, cdf_list, symbol_list): 
+    def prepare_encode(self, entropy_model, latent, means, scales, mask, symbol_list): 
         squeeze_means = self.squeeze_with_mask(means, mask)
         squeeze_scales = self.squeeze_with_mask(scales, mask)
         squeeze_latent = self.squeeze_with_mask(latent, mask)
 
-        cdf_indexs = entropy_model.build_indexes(squeeze_scales)
-        cdf_list.extend(cdf_indexs.reshape(-1).tolist())
         quantized_res = entropy_model.quantize(squeeze_latent, "symbols", squeeze_means)
         symbol_list.extend(quantized_res.reshape(-1).tolist())
 
         y_hat = self.unsqueeze_with_mask(squeeze_means + quantized_res, mask)
         return y_hat # 得到的是单步对应的y_hat
+
+    def one_step_decode(self, entropy_model, means, scales, decoder, cdf, cdf_lengths, offsets, mask):
+        squeeze_means = self.squeeze_with_mask(means, mask)
+        squeeze_scales = self.squeeze_with_mask(scales, mask)
+
+        # 解码出量化残差
+        cdf_indexs = self.gaussianconditional.build_indexes(squeeze_scales)
+        quantized_res = decoder.decode_stream(cdf_indexes.reshape(-1).tolist(), cdf, cdf_lengths, offsets)
+        quantized_res = torch.Tensor(quantized_res).reshape(squeeze_scales.shape).to(scales.device)
+
+        y_hat = unsqueeze_with_mask(means + quantized_res, mask)
+
+        return y_hat
+
 
     def compress(self, latent1, latent2):
         y = self.ga(latent1, latent2)
@@ -275,11 +289,6 @@ class latent_codec(nn.Module):
 
         # BufferedRansEncoder会保存状态，所以如果定义在init里可能导致每次调用时旧的状态没有被清除。保险起见在compress里定义，每次都重新创建一次
         y_encoder = BufferedRansEncoder() # 仅支持CDF索引和符号以list输入，而非Tensor
-        y_decoder = RansDecoder()
-
-        cdf = self.gaussianconditional.quantized_cdf.tolist()
-        cdf_lengths = self.gaussianconditional.cdf_length.reshape(-1).int().tolist()
-        offsets = self.gaussianconditional.offset.reshape(-1).int().tolist()
 
         cdf_indexs = []
         symbols = []
@@ -293,34 +302,44 @@ class latent_codec(nn.Module):
         # mean用来计算量化残差，scale用来选CDF表
         base = self.hs(z_hat)
         mean_0, scale_0 = self.adapters_out[0](self.gc(self.adapters_in[0](base))).chunk(2, 1)
-        y_hat_0 = self.prepare_encode(self.gaussianconditional, y, mean_0, scale_0, mask0, cdf_indexs, symbols)
+        y_hat_0 = self.prepare_encode(self.gaussianconditional, y, mean_0, scale_0, mask0, symbols)
         LRP = self.LRP[0](torch.cat((y_hat_0, base), dim = 1))*mask0
         LRP = 0.5 * torch.tanh(LRP)
         y_hat_0 = y_hat_0 + LRP
 
         base = base * (1 - mask0) + y_hat_0
         mean_1, scale_1 = self.adapters_out[1](self.gc(self.adapters_in[1](base))).chunk(2, 1)
-        y_hat_1 = self.prepare_encode(self.gaussianconditional, y, mean_1, scale_1, mask1, cdf_indexs, symbols)
+        y_hat_1 = self.prepare_encode(self.gaussianconditional, y, mean_1, scale_1, mask1, symbols)
         LRP = self.LRP[1](torch.cat((y_hat_1, base), dim = 1))*mask1
         LRP = 0.5 * torch.tanh(LRP)
         y_hat_1 = y_hat_1 + LRP
 
         base = base * (1 - mask1) + y_hat_1
         mean_2, scale_2 = self.adapters_out[2](self.gc(self.adapters_in[2](base))).chunk(2, 1)
-        y_hat_2 = self.prepare_encode(self.gaussianconditional, y, mean_2, scale_2, mask2, cdf_indexs, symbols)
+        y_hat_2 = self.prepare_encode(self.gaussianconditional, y, mean_2, scale_2, mask2, symbols)
         LRP = self.LRP[2](torch.cat((y_hat_2, base), dim = 1))*mask2
         LRP = 0.5 * torch.tanh(LRP)
         y_hat_2 = y_hat_2 + LRP
 
         base = base * (1 - mask2) + y_hat_2
         mean_3, scale_3 = self.adapters_out[3](self.gc(self.adapters_in[3](base))).chunk(2, 1)
-        y_hat_3 = self.prepare_encode(self.gaussianconditional, y, mean_3, scale_3, mask3, cdf_indexs, symbols)
+        y_hat_3 = self.prepare_encode(self.gaussianconditional, y, mean_3, scale_3, mask3, symbols)
         LRP = self.LRP[3](torch.cat((y_hat_3, base), dim = 1))*mask3
         LRP = 0.5 * torch.tanh(LRP)
         y_hat_3 = y_hat_3 + LRP
 
-        self.y_encoder.encode_with_indexes(symbols, cdf_indexs, cdf, cdf_lengths, offsets)
-        y_string = self.y_encoder.flush()
+        scale_all = scale_0*mask0 + scale_1*mask1 + scale_2*mask2 + scale_3*mask3
+        cdf_indexs = self.gaussianconditional.build_indexes(scale_all)
+        cdf_list.extend(cdf_indexs.reshape(-1).tolist())
+        cdf = self.gaussianconditional.quantized_cdf.tolist()
+        cdf_lengths = self.gaussianconditional.cdf_length.reshape(-1).int().tolist()
+        offsets = self.gaussianconditional.offset.reshape(-1).int().tolist()
+
+
+        # y的编码器是BufferedRansEncoder()，即self.y_encoder = BufferedRansEncoder()，encode_with_indexes是这个编码器的一个方法
+        # self.y_encoder.encode_with_indexes组合起来就是说用这个编码器的encode_with_indexes方法对y进行编码
+        y_encoder.encode_with_indexes(symbols, cdf_indexs, cdf, cdf_lengths, offsets)
+        y_string = y_encoder.flush()
         y_strings.append(y_string)
 
         return {
@@ -328,3 +347,49 @@ class latent_codec(nn.Module):
             "shape" : z.size()[-2:],
         }
         
+
+    def decompress(self, strings, z_shape):
+        y_strings = strings[0][0]
+        z_strings = strings[1]
+        z_hat = self.entropybottleneck.decompress(z_strings, z_shape)
+        cdf_indexs = []
+
+        y_decoder = RansDecoder()
+        cdf = self.gaussianconditional.quantized_cdf.tolist()
+        cdf_lengths = self.gaussianconditional.cdf_length.reshape(-1).int().tolist()
+        offsets = self.gaussianconditional.offset.reshape(-1).int().tolist()
+
+        b, c, h, w = z_hat.shape
+        mask0, mask1, mask2, mask3 = self.get_mask(b, c * 2, h * 4, w * 4, device=z_hat.device)
+
+        base = self.hs(z_hat)
+        mean_0, scale_0 = self.adapters_out[0](self.gc(self.adapters_in[0](base))).chunk(2, 1)
+        y_hat_0 = one_step_decode(self.gaussianconditional, mean_0, scale_0, y_decoder, cdf, cdf_lengths, offsets, mask0)
+        LRP = self.LRP[0](torch.cat((y_hat_0, base), dim = 1))*mask0
+        LRP = 0.5 * torch.tanh(LRP)
+        y_hat_0 = y_hat_0 + LRP
+
+        base = base * (1 - mask0) + y_hat_0
+        mean_1, scale_1 = self.adapters_out[1](self.gc(self.adapters_in[1](base))).chunk(2, 1)
+        y_hat_1 = one_step_decode(self.gaussianconditional, mean_1, scale_1, y_decoder, cdf, cdf_lengths, offsets, mask1)
+        LRP = self.LRP[1](torch.cat((y_hat_1, base), dim = 1))*mask1
+        LRP = 0.5 * torch.tanh(LRP)
+        y_hat_1 = y_hat_1 + LRP
+
+        base = base * (1 - mask1) + y_hat_1
+        mean_2, scale_2 = self.adapters_out[2](self.gc(self.adapters_in[2](base))).chunk(2, 1)
+        y_hat_2 = one_step_decode(self.gaussianconditional, mean_2, scale_2, y_decoder, cdf, cdf_lengths, offsets, mask2)
+        LRP = self.LRP[2](torch.cat((y_hat_2, base), dim = 1))*mask2
+        LRP = 0.5 * torch.tanh(LRP)
+        y_hat_2 = y_hat_2 + LRP
+
+        base = base * (1 - mask2) + y_hat_2
+        mean_3, scale_3 = self.adapters_out[3](self.gc(self.adapters_in[3](base))).chunk(2, 1)
+        y_hat_3 = one_step_decode(self.gaussianconditional, mean_3, scale_3, y_decoder, cdf, cdf_lengths, offsets, mask3)
+        LRP = self.LRP[3](torch.cat((y_hat_3, base), dim = 1))*mask3
+        LRP = 0.5 * torch.tanh(LRP)
+        y_hat_3 = y_hat_3 + LRP
+
+        y_hat = y_hat_0 + y_hat_1 + y_hat_2 + y_hat_3
+        scale_all = scale_0*mask0 + scale_1*mask1 + scale_2*mask2 + scale_3*mask3
+
