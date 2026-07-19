@@ -18,9 +18,9 @@ class DiT_IC(nn.Module):
         elic = ELIC()
         checkpoint = torch.load(elic_path)
         elic.load_state_dict(checkpoint)
-        self.e_aux = elic.g_a
+        self.E_aux = elic.g_a
         self.elic.eval()
-        self.e_aux.requires_grad_(False)
+        self.E_aux.requires_grad_(False)
 
         # latent codec
         self.latent_codec = latent_codec()
@@ -49,7 +49,7 @@ class DiT_IC(nn.Module):
 
     def compress(self, img):
         latent_1 = self.vae.encode(img).latent * self.vae.config.scaling_factor
-        latent_2 = self.e_aux((img + 1) / 2)
+        latent_2 = self.E_aux((img + 1) / 2)
 
         compress_dict = self.latent_codec.compress(latent_1, latent_2) 
 
