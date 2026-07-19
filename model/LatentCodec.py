@@ -6,22 +6,6 @@ from compressai.entropy_models import EntropyBottleneck, GaussianConditional
 from utils_modules.modules import DepthConvBlock, ResidualBlockUpsample2, ResidualBlockWithStride2
 
 
-# 创新点————时间步自适应预测
-class SynthesisTransform2(nn.Module):
-    def __init__(self, channel=320, channel_out=32) -> None:
-        super().__init__()
-        self.synthesis_transform = nn.Sequential(
-            DepthConvBlock(channel, 320),
-            DepthConvBlock(320, 320),
-            DepthConvBlock(320, 320),
-            Upsample(320, 192),
-            nn.Conv2d(192, channel_out, kernel_size=3, padding=1)
-        )
-        
-    def forward(self, x):
-        x = self.synthesis_transform(x)
-        return x
-
 # 常规组件
 class Downsample(nn.Module):
     def __init__(self, in_ch, out_ch):
@@ -45,6 +29,7 @@ class Upsample(nn.Module):
 
     def forward(self, x):
         return self.up(x)
+# ga和gs的实质都是生成域和压缩域的转换
 # ga
 class AnalysisTransform(nn.Module):
     def __init__(self, ch_emd=32, channel=320):
@@ -204,9 +189,9 @@ class latent_codec(nn.Module):
         self.adapters_in = nn.ModuleList(Adapter(in_ch=channel, out_ch=context_dim) for i in range(4))
         self.adapters_out = nn.ModuleList(Adapter(in_ch=context_dim, out_ch=channel * 2) for i in range(4))
         self.LRP = nn.ModuleList(LRP(in_ch=context_dim, out_ch=channel) for i in range(4))
+        self.D_aux = AuxDecoder(ch_emd, channel)
+        self.prompt = SynthesisTransform(channel, 320)
      
-        
-
 
     # 获取掩码√
     def get_mask(self, b, c, h, w, device="cuda"):
@@ -276,7 +261,7 @@ class latent_codec(nn.Module):
         quantized_res = decoder.decode_stream(cdf_indexes.reshape(-1).tolist(), cdf, cdf_lengths, offsets)
         quantized_res = torch.Tensor(quantized_res).reshape(squeeze_scales.shape).to(scales.device)
 
-        y_hat = unsqueeze_with_mask(means + quantized_res, mask)
+        y_hat = unsqueeze_with_mask(squeeze_means + quantized_res, mask)
 
         return y_hat
 
@@ -391,5 +376,9 @@ class latent_codec(nn.Module):
         y_hat_3 = y_hat_3 + LRP
 
         y_hat = y_hat_0 + y_hat_1 + y_hat_2 + y_hat_3
-        scale_all = scale_0*mask0 + scale_1*mask1 + scale_2*mask2 + scale_3*mask3
+        scale_all = scale_0*mask0 + scale_1*mask1 + scale_2*mask2 + scale_3*mask3 # 预测均值
+        mean = self.gs(y_hat) # gs输出
+        y_aux = self.D_aux(y_hat) # 辅助解码器输出
+        prompt = self.prompt(y_hat) # 用于latent条件生成
 
+        return scale_all, mean, y_aux, prompt
