@@ -39,14 +39,14 @@ class scheduler(nn.Module):
     def __init__(self, base_scheduler, device='cuda'):
         self.base_scheduler = base_scheduler
 
-    def step(self, log_variance):
+    def step(self, log_variance, model_output, sample):
         trans_log_variance = trans_variance(log_variance)
         factor = Adaptive(trans_log_variance)
         sigma = self.base_scheduler.sigmas[0]
         # 自适应噪声强度的实质是，把原始一步更新强度局部缩小
         adaptive_sigma = sigma*factor
-        x0_pred = sample - adaptive_sigma * model_output
-        return x0_pred
+        x_denoised = sample - adaptive_sigma * model_output
+        return x_denoised
 
         
 
