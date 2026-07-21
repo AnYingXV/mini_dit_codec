@@ -36,7 +36,7 @@ class LatentConditionAlignment(nn.Module):
         # 处理latent，使得和embedding形式对齐。图片：[B,C,W,H] embedding：[B,num_tokens,C]
         x = latent.flatten(2)
         x = F.adaptive_avg_pool1d(x, self.num_fixed)
-        x = transpose(1, 2)
+        x = x.transpose(1, 2)
         learnable_part = self.learnable_part.expand(B, -1, -1)
         x = torch.cat([x, learnable_part], dim = 1)
         latent_prompt = self.align(x) # 维度从latent对齐到DiT，linear默认作用在最后一维
@@ -55,11 +55,11 @@ class LatentConditionAlignment(nn.Module):
 
             latent_to_clip = logit_scale*align_clip_latent@clip_target.t()
             clip_to_latent = latent_to_clip.t()
-            labels = torch.range(B, device=latent.device)
+            labels = torch.arange(B, device=latent.device)
 
             clip_align_loss = (F.cross_entropy(latent_to_clip, labels) + F.cross_entropy(clip_to_latent, labels)) / 2
 
-            return (latent_prompt, clip_align_loss) if self.if_train else latent_prompt
+        return (latent_prompt, clip_align_loss) if self.if_train else latent_prompt
 
 
 class DiT_IC(nn.Module):
