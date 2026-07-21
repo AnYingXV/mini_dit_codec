@@ -8,7 +8,7 @@ from diffusers import AutoencoderDC, SanaTransformer2DModel
 from scheduler import make_1step_sched, scheduler, trans_variance, randn_tensor
 
 class LatentConditionAlignment(nn.Module):
-    def __init__(self, SANADiT_emb_dim = 2304, num_tokens = 77, num_fixed = 48, CLIP_emb_dim = 768, in_channels, transformer_depth: int = 2, transformer_heads: int = 8, if_train = False):
+    def __init__(self, in_channels, SANADiT_emb_dim = 2304, num_tokens = 77, num_fixed = 48, CLIP_emb_dim = 768, transformer_depth: int = 2, transformer_heads: int = 8, if_train = False):
         super(LatentConditionAlignment, self).__init__()
         # in_channels应该是320
         self.SANADiT_emb_dim = SANADiT_emb_dim
