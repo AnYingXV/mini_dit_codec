@@ -38,7 +38,8 @@ def decompress_one_img(net, img_bin, img_name):
     with open(img_bin, "rb") as f:
         strings, z_shape = read_body(f)
     with torch.no_grad():
-        out_img = net.decompress()
+        out_img = net.decompress(strings, z_shape)
+    return out_img
 
 
 def main(dataset_path, bin_path):
@@ -70,7 +71,8 @@ def main(dataset_path, bin_path):
         print(f"{img_name_ex} bpp = {bpp:.5f}")
 
         # decompress
-        out_img = decompress_one_img()
+        out_img = decompress_one_img(net, img_bin, name)
+        
 
 
 

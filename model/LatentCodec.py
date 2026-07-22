@@ -7,6 +7,11 @@ from utils_modules.modules import DepthConvBlock, ResidualBlockUpsample2, Residu
 
 
 # 常规组件
+def ste_round(x):
+    """Differentiable quantization via the Straight-Through-Estimator."""
+    # STE (straight-through estimator) trick: x_hard - x_soft.detach() + x_soft
+    return (torch.round(x) - x).detach() + x
+
 class Downsample(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -191,7 +196,6 @@ class latent_codec(nn.Module):
         self.LRP = nn.ModuleList(LRP(in_ch=context_dim, out_ch=channel) for i in range(4))
         self.D_aux = AuxDecoder(ch_emd, channel)
         self.prompt = SynthesisTransform(channel, 320)
-     
 
     # 获取掩码√
     def get_mask(self, b, c, h, w, device="cuda"):
@@ -239,6 +243,18 @@ class latent_codec(nn.Module):
         unsqueezed = torch.cat((squeezed_sth*mask0, squeezed_sth*mask1, squeezed_sth*mask2, squeezed_sth*mask3), dim = 1)
         return unsqueezed
 
+    def one_step_forward(latent, means, scales, mask):
+        squeeze_means = self.squeeze_with_mask(means, mask)
+        squeeze_scales = self.squeeze_with_mask(scales, mask)
+        squeeze_latent = self.squeeze_with_mask(latent, mask)
+
+        _, y_likelihoods = self.gaussianconditional(squeeze_latent, squeeze_scales, means=squeeze_means)
+        y_hat = ste_round(squeeze_latent - squeeze_means) + squeeze_means
+
+        unsq_y_hat = unsqueeze_with_mask(y_hat, mask)
+        unsq_y_likelihoods = unsqueeze_with_mask(y_likelihoods, mask)
+        return unsq_y_hat, unsq_y_likelihoods
+
     # 得到待编码的量化残差、用于编码的cdf索引、返回用于下一步预测的y_hat
     # 此时传入的latent, means, scales都是完整的，而非经过对应mask处理后的稀疏的
     def prepare_encode(self, entropy_model, latent, means, scales, mask, symbol_list): 
@@ -264,6 +280,54 @@ class latent_codec(nn.Module):
         y_hat = unsqueeze_with_mask(squeeze_means + quantized_res, mask)
 
         return y_hat
+
+    def forward(self, latent1, latent2):
+        y = self.ga(latent1, latent2)
+        z = self.ha(y)
+
+        _, z_likelihoods = self.entropybottleneck(z)
+        z_offset = self.entropybottleneck._get_medians()
+        z_hat = ste_round(z - z_offset) + z_offset
+
+        b, c, w, h = y.shape
+        mask0, mask1, mask2, mask3 = self.get_mask(b, c, h, w, device=y.device)
+
+        base = self.hs(z_hat)
+        mean_0, scale_0 = self.adapters_out[0](self.gc(self.adapters_in[0](base))).chunk(2, 1)
+        y_hat_0, y_likelihoods_0 = self.one_step_forward(y, mean_0, scale_0, mask0)
+        LRP = self.LRP[0](torch.cat((y_hat_0, base), dim = 1))*mask0
+        LRP = 0.5 * torch.tanh(LRP)
+        y_hat_0 = y_hat_0 + LRP
+
+        base = base * (1 - mask0) + y_hat_0
+        mean_1, scale_1 = self.adapters_out[1](self.gc(self.adapters_in[1](base))).chunk(2, 1)
+        y_hat_1, y_likelihoods_1 = self.one_step_forward(y, mean_1, scale_1, mask1)
+        LRP = self.LRP[1](torch.cat((y_hat_1, base), dim = 1))*mask1
+        LRP = 0.5 * torch.tanh(LRP)
+        y_hat_1 = y_hat_1 + LRP
+
+        base = base * (1 - mask1) + y_hat_1
+        mean_2, scale_2 = self.adapters_out[2](self.gc(self.adapters_in[2](base))).chunk(2, 1)
+        y_hat_2, y_likelihoods_2 = self.one_step_forward(y, mean_2, scale_2, mask2)
+        LRP = self.LRP[2](torch.cat((y_hat_2, base), dim = 1))*mask2
+        LRP = 0.5 * torch.tanh(LRP)
+        y_hat_2 = y_hat_2 + LRP
+
+        base = base * (1 - mask2) + y_hat_2
+        mean_3, scale_3 = self.adapters_out[3](self.gc(self.adapters_in[3](base))).chunk(2, 1)
+        y_hat_3, y_likelihoods_3 = self.one_step_forward(y, mean_3, scale_3, mask3)
+        LRP = self.LRP[3](torch.cat((y_hat_3, base), dim = 1))*mask3
+        LRP = 0.5 * torch.tanh(LRP)
+        y_hat_3 = y_hat_3 + LRP
+
+        y_hat = y_hat_0 + y_hat_1 + y_hat_2 + y_hat_3
+        y_likelihoods = y_likelihoods_0 + y_likelihoods_1 + y_likelihoods_2 + y_likelihoods_3
+        scale_all = scale_0*mask0 + scale_1*mask1 + scale_2*mask2 + scale_3*mask3
+        mean = self.gs(y_hat)
+        y_aux = self.D_aux(y_hat)
+        prompt = self.prompt(y_hat)
+
+        return scale_all, mean, y_aux, prompt, y_likelihoods, z_likelihoods
 
 
     def compress(self, latent1, latent2):
