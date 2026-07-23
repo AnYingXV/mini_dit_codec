@@ -323,11 +323,11 @@ class latent_codec(nn.Module):
         y_hat = y_hat_0 + y_hat_1 + y_hat_2 + y_hat_3
         y_likelihoods = y_likelihoods_0 + y_likelihoods_1 + y_likelihoods_2 + y_likelihoods_3
         scale_all = scale_0*mask0 + scale_1*mask1 + scale_2*mask2 + scale_3*mask3
-        mean = self.gs(y_hat)
+        trans_y = self.gs(y_hat)
         y_aux = self.D_aux(y_hat)
         prompt = self.prompt(y_hat)
 
-        return scale_all, mean, y_aux, prompt, y_likelihoods, z_likelihoods
+        return scale_all, trans_y, y_aux, prompt, y_likelihoods, z_likelihoods
 
 
     def compress(self, latent1, latent2):
@@ -441,8 +441,8 @@ class latent_codec(nn.Module):
 
         y_hat = y_hat_0 + y_hat_1 + y_hat_2 + y_hat_3
         scale_all = scale_0*mask0 + scale_1*mask1 + scale_2*mask2 + scale_3*mask3 # 预测均值
-        mean = self.gs(y_hat) # gs输出
+        trans_y = self.gs(y_hat) # gs输出
         y_aux = self.D_aux(y_hat) # 辅助解码器输出
         prompt = self.prompt(y_hat) # 用于latent条件生成
 
-        return scale_all, mean, y_aux, prompt
+        return scale_all, trans_y, y_aux, prompt

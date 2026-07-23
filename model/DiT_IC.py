@@ -102,6 +102,39 @@ class DiT_IC(nn.Module):
         for name, param in self.DiT.named_parameters():
             param.requires_grad = False  
         
+    def forward(self, ):
+        latent_1 = self.vae.encode(img).latent * self.vae.config.scaling_factor
+        latent_2 = self.E_aux((img + 1) / 2)
+        log_variance, trans_y, y_aux, prompt, y_likelihoods, z_likelihoods = self.latent_codec(latent_1, latent_2)
+        trans_log_variance = trans_variance(log_variance)
+        scale = torch.exp(0.5 * trans_log_variance)
+
+        latent_hat = trans_y # 该模式对应论文自蒸馏创新点
+
+        t = self.sched.base_scheduler.timesteps 
+        expand_t = t.expand(latent_hat.shape[0]) 
+        expand_t = expand_t * self.DiT.config.timestep_scale
+
+        latent_prompt, clip_align_loss = self.prompter(prompt) # 训练模式下，返回tuple，接收返回的时候直接解包
+
+        velocity = self.DiT(
+            latent_hat, 
+            encoder_hidden_states = latent_prompt.to(latent_hat.device), 
+            timestep = expand_t.to(latent_hat.device),
+            return_dict=False,
+            )[0]
+
+        x_denoised = self.sched.step(log_variance, velocity, latent_hat) + y_aux
+
+        output_image = self.vae.decode(x_denoised / self.vae.config.scaling_factor, return_dict=False)[0].clamp(-1, 1)
+
+        # 0.05是该损失的权重，F.relu复制截断，m = 0.5，所以相似度达到0.5就停止对齐
+        distill_loss = 0.05*F.relu(1 - 0.5 - F.cosine_similarity(x_denoised, latent_1))
+
+        return output_image, clip_align_loss, distill_loss, y_likelihoods, z_likelihoods
+
+
+
     def compress(self, img):
         latent_1 = self.vae.encode(img).latent * self.vae.config.scaling_factor
         latent_2 = self.E_aux((img + 1) / 2)
@@ -112,30 +145,24 @@ class DiT_IC(nn.Module):
 
     # 预测速度场用的是SANA，实现一步去噪用的是DPMSolverMultistepScheduler
     def decompress(self, strings, z_shape):
-        log_variance, mean, y_aux, prompt = self.latent_codec(strings, z_shape)
+        log_variance, trans_y, y_aux, prompt = self.latent_codec(strings, z_shape)
         trans_log_variance = trans_variance(log_variance)
         scale = torch.exp(0.5 * trans_log_variance)
 
-        # latent
-        if self.codec_mode == 'sample':
-            sample = randn_tensor(
-                mean.shape, generator=None, device=mean.device, dtype=mean.dtype
-            )
-            latent_hat = mean + 0.1 * scale * sample
-        else: 
-            latent_hat = mean
+        # latent 使用直接相等的模式，对应于自蒸馏创新点
+        latent_hat = trans_y
 
         # 时间步
         t = self.sched.base_scheduler.timesteps # 获取生成的base_scheduler的时间步数值
         expand_t = t.expand(latent_hat.shape[0]) # batch维扩展，使得一个batch内的所有图片都能对应上时间步
         expand_t = expand_t * self.DiT.config.timestep_scale # 单步去噪模块和预测向量场模块使用的时间可能不在同一尺度上，但是二者之间有参数转换关系
         # latent 去噪条件
-        prompt = self.prompter(prompt)
+        latent_prompt = self.prompter(prompt)
 
         # 预测向量场
         velocity = self.DiT(
             latent_hat, 
-            encoder_hidden_states = prompt.to(latent_hat.device), 
+            encoder_hidden_states = latent_prompt.to(latent_hat.device), 
             timestep = expand_t.to(latent_hat.device),
             return_dict=False,
             )[0]

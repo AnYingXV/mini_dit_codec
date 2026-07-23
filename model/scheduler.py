@@ -61,7 +61,7 @@ def Adaptive(trans_log_variance):
     return factor
     
 
-# 纯工具
+# 纯工具，从标准高斯里采样epsilon
 def randn_tensor(
     shape: Union[Tuple, List],
     generator: Optional[Union[List["torch.Generator"], "torch.Generator"]] = None,
