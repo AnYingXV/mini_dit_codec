@@ -102,7 +102,7 @@ class DiT_IC(nn.Module):
         for name, param in self.DiT.named_parameters():
             param.requires_grad = False  
         
-    def forward(self, ):
+    def forward(self, img):
         latent_1 = self.vae.encode(img).latent * self.vae.config.scaling_factor
         latent_2 = self.E_aux((img + 1) / 2)
         log_variance, trans_y, y_aux, prompt, y_likelihoods, z_likelihoods = self.latent_codec(latent_1, latent_2)
