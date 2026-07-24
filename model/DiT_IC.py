@@ -4,8 +4,16 @@ import torch.nn.functional as F
 
 from ELIC.elic_official import ELIC
 from LatentCodec import latent_codec
+from peft import get_peft_model, LoraConfig
 from diffusers import AutoencoderDC, SanaTransformer2DModel
 from scheduler import make_1step_sched, Scheduler, randn_tensor
+
+# 筛VAE里decoder里需要插入LoRA的层
+def filter_supported_modules(model):
+    import re, torch.nn as nn
+    pattern = re.compile(r"^decoder\..*(conv1|conv2|conv_in|conv_shortcut|conv_inverted|conv_point|to_k|to_q|to_v|to_out\.0)$")
+    supported = (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.Linear)
+    return [n for n, m in model.named_modules() if pattern.match(n) and isinstance(m, supported)]
 
 class LatentConditionAlignment(nn.Module):
     def __init__(self, in_channels = 320, SANADiT_emb_dim = 2304, num_tokens = 77, num_fixed = 48, CLIP_emb_dim = 768, transformer_depth: int = 2, transformer_heads: int = 8, if_train = True):
@@ -69,6 +77,12 @@ class DiT_IC(nn.Module):
         print("------------------load encoders/decoder------------------")
         # vae
         self.vae = AutoencoderDC.from_pretrained(dit_path, subfolder="vae")
+
+        # 冻结VAE
+        for param in self.vae.parameters():
+            param.requires_grad = False
+
+        self.build_vae_lora(lora_rank=16, lora_alpha=16)
         
         # ELIC.ga
         elic = ELIC()
@@ -83,11 +97,30 @@ class DiT_IC(nn.Module):
         
 
         print("------------------load denoised module-------------------")
-        # 创建DiT预测、base scheduler
+        # 创建DiT预测、DiT LoRA、base scheduler、prompter
         self.time = 999
         self.build_DiT(dit_path=dit_path, device="cuda", use_merge=False)
+        self.build_DiT_lora(lora_rank=16, lora_alpha=16)
         self.prompter = LatentConditionAlignment()
         
+    def build_vae_lora(self, lora_rank, lora_alpha):
+        vae_lora_config = LoraConfig(
+            r=lora_rank,
+            lora_alpha=lora_alpha,
+            target_modules=filter_supported_modules(self.vae),
+            bias="none",
+            init_lora_weights="gaussian",
+        )
+        self.vae = get_peft_model(self.vae, vae_lora_config)
+        
+        for param in self.vae.parameters():
+            param.requires_grad = False
+        
+        for name, param in self.vae.named_parameters():
+            if "lora" in name:
+                param.requires_grad = True
+        
+        print("VAE-LoRA Done")
 
     def build_DiT(self, dit_path, device='cuda', use_merge=False):
         base_scheduler = make_1step_sched(dit_path, device)
@@ -102,14 +135,39 @@ class DiT_IC(nn.Module):
 
         self.register_buffer("timesteps", torch.tensor([self.time], dtype=torch.long))
         
+        # 冻结DiT主干
         for name, param in self.DiT.named_parameters():
             param.requires_grad = False  
         
+    def build_DiT_lora(self, lora_rank, lora_alpha, channel):
+        target_modules_DiT = [
+            "to_k", "to_q", "to_v", "to_out.0", "conv", "conv1", "conv2", "conv_shortcut", "conv_out",
+            "proj_in", "proj_out", "ff.net.2", "ff.net.0.proj", "conv_inverted", "conv_point"
+        ]
+        DiT_lora_config = LoraConfig(
+            r=lora_rank,
+            lora_alpha=lora_alpha,
+            target_modules=target_modules_DiT,
+            bias="none",
+            init_lora_weights="gaussian",
+        )
+        self.DiT = get_peft_model(self.DiT, DiT_lora_config)
+        
+        # 先把所有module全部关掉
+        for param in self.DiT.parameters():
+            param.requires_grad = False
+        
+        # 只打开LoRA
+        for name, param in self.DiT.named_parameters():
+            if "lora" in name:
+                param.requires_grad = True
+                
+        print("DiT-LoRA Done")
+
     def forward(self, img, text_emb, img_emb):
         latent_1 = self.vae.encode(img).latent * self.vae.config.scaling_factor
         latent_2 = self.E_aux((img + 1) / 2).detach()
         trans_log_variance, trans_y, y_aux, prompt, y_likelihoods, z_likelihoods = self.latent_codec(latent_1, latent_2)
-        scale = torch.exp(0.5 * trans_log_variance)
 
         latent_hat = trans_y # 该模式对应论文自蒸馏创新点
 
@@ -147,7 +205,6 @@ class DiT_IC(nn.Module):
     # 预测速度场用的是SANA，实现一步去噪用的是DPMSolverMultistepScheduler
     def decompress(self, strings, z_shape):
         trans_log_variance, trans_y, y_aux, prompt = self.latent_codec.decompress(strings, z_shape)
-        scale = torch.exp(0.5 * trans_log_variance)
 
         # latent 使用直接相等的模式，对应于自蒸馏创新点
         latent_hat = trans_y
