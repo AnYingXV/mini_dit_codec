@@ -5,10 +5,10 @@ import torch.nn.functional as F
 from ELIC.elic_official import ELIC
 from LatentCodec import latent_codec
 from diffusers import AutoencoderDC, SanaTransformer2DModel
-from scheduler import make_1step_sched, scheduler, trans_variance, randn_tensor
+from scheduler import make_1step_sched, Scheduler, randn_tensor
 
 class LatentConditionAlignment(nn.Module):
-    def __init__(self, in_channels, SANADiT_emb_dim = 2304, num_tokens = 77, num_fixed = 48, CLIP_emb_dim = 768, transformer_depth: int = 2, transformer_heads: int = 8, if_train = False):
+    def __init__(self, in_channels = 320, SANADiT_emb_dim = 2304, num_tokens = 77, num_fixed = 48, CLIP_emb_dim = 768, transformer_depth: int = 2, transformer_heads: int = 8, if_train = True):
         super(LatentConditionAlignment, self).__init__()
         # in_channels应该是320
         self.SANADiT_emb_dim = SANADiT_emb_dim
@@ -31,6 +31,7 @@ class LatentConditionAlignment(nn.Module):
             self.logit_scale = nn.Parameter(torch.ones([]) * torch.log(torch.tensor(1 / 0.07))) # 论文公式里的τ
 
     def forward(self, latent, text_emb = None, img_emb = None):
+        clip_align_loss = None
         B, C, H, W = latent.shape
 
         # 处理latent，使得和embedding形式对齐。图片：[B,C,W,H] embedding：[B,num_tokens,C]
@@ -50,7 +51,7 @@ class LatentConditionAlignment(nn.Module):
 
             # 训练对齐目标——CLIP文本embedding
             clip_target = text_emb if text_emb is not None else img_emb
-            clip_target = F.normalize(clip_target, dim=-1)
+            clip_target = F.normalize(clip_target.detach(), dim=-1)
             logit_scale = self.logit_scale.exp()
 
             latent_to_clip = logit_scale*align_clip_latent@clip_target.t()
@@ -63,7 +64,7 @@ class LatentConditionAlignment(nn.Module):
 
 
 class DiT_IC(nn.Module):
-    def __init__(self, dit_path, elic_path, codec_mode='self_dist'):
+    def __init__(self, dit_path, elic_path):
         super(DiT_IC, self).__init__()
         print("------------------load encoders/decoder------------------")
         # vae
@@ -73,8 +74,8 @@ class DiT_IC(nn.Module):
         elic = ELIC()
         checkpoint = torch.load(elic_path)
         elic.load_state_dict(checkpoint)
+        elic.eval()
         self.E_aux = elic.g_a
-        self.elic.eval()
         self.E_aux.requires_grad_(False)
 
         # latent codec
@@ -82,13 +83,15 @@ class DiT_IC(nn.Module):
         
 
         print("------------------load denoised module-------------------")
-        self.DiT = SanaTransformer2DModel.from_pretrained(dit_path, subfolder="transformer")
-        self.codec_mode = codec_mode
+        # 创建DiT预测、base scheduler
+        self.time = 999
+        self.build_DiT(dit_path=dit_path, device="cuda", use_merge=False)
         self.prompter = LatentConditionAlignment()
+        
 
     def build_DiT(self, dit_path, device='cuda', use_merge=False):
         base_scheduler = make_1step_sched(dit_path, device)
-        self.sched = scheduler(base_scheduler, device)
+        self.sched = Scheduler(base_scheduler)
 
         if use_merge:
             dit_config = SanaTransformer2DModel.load_config(dit_path, subfolder="transformer")
@@ -102,11 +105,10 @@ class DiT_IC(nn.Module):
         for name, param in self.DiT.named_parameters():
             param.requires_grad = False  
         
-    def forward(self, img):
+    def forward(self, img, text_emb, img_emb):
         latent_1 = self.vae.encode(img).latent * self.vae.config.scaling_factor
-        latent_2 = self.E_aux((img + 1) / 2)
-        log_variance, trans_y, y_aux, prompt, y_likelihoods, z_likelihoods = self.latent_codec(latent_1, latent_2)
-        trans_log_variance = trans_variance(log_variance)
+        latent_2 = self.E_aux((img + 1) / 2).detach()
+        trans_log_variance, trans_y, y_aux, prompt, y_likelihoods, z_likelihoods = self.latent_codec(latent_1, latent_2)
         scale = torch.exp(0.5 * trans_log_variance)
 
         latent_hat = trans_y # 该模式对应论文自蒸馏创新点
@@ -115,7 +117,7 @@ class DiT_IC(nn.Module):
         expand_t = t.expand(latent_hat.shape[0]) 
         expand_t = expand_t * self.DiT.config.timestep_scale
 
-        latent_prompt, clip_align_loss = self.prompter(prompt) # 训练模式下，返回tuple，接收返回的时候直接解包
+        latent_prompt, clip_align_loss = self.prompter(prompt, text_emb, img_emb) # 训练模式下，返回tuple，接收返回的时候直接解包
 
         velocity = self.DiT(
             latent_hat, 
@@ -124,20 +126,19 @@ class DiT_IC(nn.Module):
             return_dict=False,
             )[0]
 
-        x_denoised = self.sched.step(log_variance, velocity, latent_hat) + y_aux
+        x_denoised = self.sched.step(trans_log_variance, velocity, latent_hat) + y_aux
 
         output_image = self.vae.decode(x_denoised / self.vae.config.scaling_factor, return_dict=False)[0].clamp(-1, 1)
 
-        # 0.05是该损失的权重，F.relu复制截断，m = 0.5，所以相似度达到0.5就停止对齐
-        distill_loss = 0.05*F.relu(1 - 0.5 - F.cosine_similarity(x_denoised, latent_1))
+        # 0.05是该损失的权重，F.relu复制截断，m = 0.5，所以相似度达到0.5就停止对齐,loss一般是标量
+        distill_loss = 0.05*F.relu(1 - 0.5 - F.cosine_similarity(x_denoised, latent_1.detach())).mean()
 
         return output_image, clip_align_loss, distill_loss, y_likelihoods, z_likelihoods
 
 
-
     def compress(self, img):
         latent_1 = self.vae.encode(img).latent * self.vae.config.scaling_factor
-        latent_2 = self.E_aux((img + 1) / 2)
+        latent_2 = self.E_aux((img + 1) / 2).detach()
 
         compress_dict = self.latent_codec.compress(latent_1, latent_2) 
 
@@ -145,8 +146,7 @@ class DiT_IC(nn.Module):
 
     # 预测速度场用的是SANA，实现一步去噪用的是DPMSolverMultistepScheduler
     def decompress(self, strings, z_shape):
-        log_variance, trans_y, y_aux, prompt = self.latent_codec(strings, z_shape)
-        trans_log_variance = trans_variance(log_variance)
+        trans_log_variance, trans_y, y_aux, prompt = self.latent_codec.decompress(strings, z_shape)
         scale = torch.exp(0.5 * trans_log_variance)
 
         # latent 使用直接相等的模式，对应于自蒸馏创新点
@@ -157,7 +157,7 @@ class DiT_IC(nn.Module):
         expand_t = t.expand(latent_hat.shape[0]) # batch维扩展，使得一个batch内的所有图片都能对应上时间步
         expand_t = expand_t * self.DiT.config.timestep_scale # 单步去噪模块和预测向量场模块使用的时间可能不在同一尺度上，但是二者之间有参数转换关系
         # latent 去噪条件
-        latent_prompt = self.prompter(prompt)
+        latent_prompt, _ = self.prompter(prompt)
 
         # 预测向量场
         velocity = self.DiT(
@@ -168,7 +168,7 @@ class DiT_IC(nn.Module):
             )[0]
 
         # 一步去噪
-        x_denoised = self.sched.step(log_variance, velocity, latent_hat) + y_aux
+        x_denoised = self.sched.step(trans_log_variance, velocity, latent_hat) + y_aux
 
         output_image = self.vae.decode(x_denoised / self.vae.config.scaling_factor, return_dict=False)[0].clamp(-1, 1)
 

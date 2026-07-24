@@ -13,34 +13,12 @@ def make_1step_sched(pretrained_path, device='cuda'):
 
     return noise_scheduler_1step
 
-class SynthesisTransform2(nn.Module):
-    def __init__(self, channel=320, channel_out=32) -> None:
+class Scheduler(nn.Module):
+    def __init__(self, base_scheduler):
         super().__init__()
-        self.synthesis_transform = nn.Sequential(
-            DepthConvBlock(channel, 320),
-            DepthConvBlock(320, 320),
-            DepthConvBlock(320, 320),
-            Upsample(320, 192),
-            nn.Conv2d(192, channel_out, kernel_size=3, padding=1)
-        )
-        
-    def forward(self, x):
-        x = self.synthesis_transform(x)
-        return x
-
-def trans_variance(log_variance):
-    trans = SynthesisTransform2()
-    trans_log_variance = trans(log_variance)
-    trans_log_variance = torch.clamp(trans_log_variance, -30.0, 20.0) # 限定范围，稳定数值
-    return trans_log_variance
-
-
-class scheduler(nn.Module):
-    def __init__(self, base_scheduler, device='cuda'):
         self.base_scheduler = base_scheduler
 
-    def step(self, log_variance, model_output, sample):
-        trans_log_variance = trans_variance(log_variance)
+    def step(self, trans_log_variance, model_output, sample):
         factor = Adaptive(trans_log_variance)
         sigma = self.base_scheduler.sigmas[0]
         # 自适应噪声强度的实质是，把原始一步更新强度局部缩小
