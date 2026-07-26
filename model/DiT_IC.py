@@ -230,10 +230,3 @@ class DiT_IC(nn.Module):
         output_image = self.vae.decode(x_denoised / self.vae.config.scaling_factor, return_dict=False)[0].clamp(-1, 1)
 
         return output_image
-
-        
-
-
-
-if __name__ == '__main__':
-    elic_path = "/img_research/StableCodec/ELIC/elic_official.pth"

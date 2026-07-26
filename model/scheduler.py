@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from diffusers import DPMSolverMultistepScheduler
 
+# 经验证，自动生成的时间步就是999，无需传参self.time=999
 def make_1step_sched(pretrained_path, device='cuda'):
     noise_scheduler_1step = DPMSolverMultistepScheduler.from_pretrained(pretrained_path, subfolder="scheduler")
     noise_scheduler_1step.set_timesteps(1, device=device)
@@ -12,6 +13,7 @@ def make_1step_sched(pretrained_path, device='cuda'):
     noise_scheduler_1step.betas = noise_scheduler_1step.betas.to(device)
 
     return noise_scheduler_1step
+
 
 class Scheduler(nn.Module):
     def __init__(self, base_scheduler):
@@ -88,3 +90,4 @@ def randn_tensor(
         latents = torch.randn(shape, generator=generator, device=rand_device, dtype=dtype, layout=layout).to(device)
 
     return latents
+
