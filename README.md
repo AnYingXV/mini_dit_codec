@@ -1,4 +1,3 @@
-````markdown
 # Self DiT-IC Reproduction
 
 Original code repository: https://github.com/Eric-qi/DiT-IC
@@ -9,9 +8,9 @@ Arxiv: https://arxiv.org/abs/2603.13162
 
 This reproduction uses the pretrained SANA model in Diffusers format:
 
-```
+```text
 Efficient-Large-Model/Sana_600M_1024px_diffusers
-````
+```
 
 First, install or update `huggingface_hub`:
 
@@ -34,9 +33,6 @@ hf download Efficient-Large-Model/Sana_600M_1024px_diffusers \
 
 The local DiT path can then be set to:
 
-```
+```python
 dit_path = "./SANA"
 ```
-
-````
-
