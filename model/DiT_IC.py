@@ -98,7 +98,6 @@ class DiT_IC(nn.Module):
 
         print("------------------load denoised module-------------------")
         # 创建DiT预测、DiT LoRA、base scheduler、prompter
-        self.time = 999
         self.build_DiT(dit_path=dit_path, device="cuda", use_merge=False)
         self.build_DiT_lora(lora_rank=16, lora_alpha=16)
         self.prompter = LatentConditionAlignment()
@@ -122,18 +121,12 @@ class DiT_IC(nn.Module):
         
         print("VAE-LoRA Done")
 
-    def build_DiT(self, dit_path, device='cuda', use_merge=False):
+    def build_DiT(self, dit_path, device='cuda'):
         base_scheduler = make_1step_sched(dit_path, device)
         self.sched = Scheduler(base_scheduler)
 
-        if use_merge:
-            dit_config = SanaTransformer2DModel.load_config(dit_path, subfolder="transformer")
-            self.DiT = SanaTransformer2DModel.from_config(dit_config)
-        else:
-            self.DiT = SanaTransformer2DModel.from_pretrained(dit_path, subfolder="transformer")
-            # self.DiT = SanaTransformer2DModel.from_pretrained(dit_path, subfolder="transformer_512")
-
-        self.register_buffer("timesteps", torch.tensor([self.time], dtype=torch.long))
+        self.DiT = SanaTransformer2DModel.from_pretrained(dit_path, subfolder="transformer")
+        # self.DiT = SanaTransformer2DModel.from_pretrained(dit_path, subfolder="transformer_512")
         
         # 冻结DiT主干
         for name, param in self.DiT.named_parameters():
