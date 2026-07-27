@@ -82,7 +82,7 @@ class DiT_IC(nn.Module):
         for param in self.vae.parameters():
             param.requires_grad = False
 
-        self.build_vae_lora(lora_rank=16, lora_alpha=16)
+        self.build_vae_lora(lora_rank=32, lora_alpha=32) # 论文给出数值
         
         # ELIC.ga
         elic = ELIC()
@@ -98,8 +98,8 @@ class DiT_IC(nn.Module):
 
         print("------------------load denoised module-------------------")
         # 创建DiT预测、DiT LoRA、base scheduler、prompter
-        self.build_DiT(dit_path=dit_path, device="cuda", use_merge=False)
-        self.build_DiT_lora(lora_rank=16, lora_alpha=16)
+        self.build_DiT(dit_path=dit_path, device="cuda")
+        self.build_DiT_lora(lora_rank=64, lora_alpha=64) # 论文给出数值
         self.prompter = LatentConditionAlignment()
         
     def build_vae_lora(self, lora_rank, lora_alpha):
@@ -132,7 +132,7 @@ class DiT_IC(nn.Module):
         for name, param in self.DiT.named_parameters():
             param.requires_grad = False  
         
-    def build_DiT_lora(self, lora_rank, lora_alpha, channel):
+    def build_DiT_lora(self, lora_rank, lora_alpha):
         target_modules_DiT = [
             "to_k", "to_q", "to_v", "to_out.0", "conv", "conv1", "conv2", "conv_shortcut", "conv_out",
             "proj_in", "proj_out", "ff.net.2", "ff.net.0.proj", "conv_inverted", "conv_point"
