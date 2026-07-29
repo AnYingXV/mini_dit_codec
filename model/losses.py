@@ -24,8 +24,8 @@ class DiTICLosses(nn.Module):
         self.lambda_adv = lambda_adv
 
     def rate_loss(self, y_likelihoods, z_likelihoods, num_pixels):
-        y_bpp = -torch.log2(y_likelihoods).sum() / num_pixels
-        z_bpp = -torch.log2(z_likelihoods).sum() / num_pixels
+        y_bpp = (-torch.log2(y_likelihoods).clamp_min(1e-9)).sum() / num_pixels
+        z_bpp = (-torch.log2(z_likelihoods).clamp_min(1e-9)).sum() / num_pixels
         R = y_bpp + z_bpp
         return R
 

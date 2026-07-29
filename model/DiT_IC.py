@@ -3,10 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ELIC.elic_official import ELIC
-from LatentCodec import latent_codec
+from model.LatentCodec import latent_codec
 from peft import get_peft_model, LoraConfig
 from diffusers import AutoencoderDC, SanaTransformer2DModel
-from scheduler import make_1step_sched, Scheduler, randn_tensor
+from model.scheduler import make_1step_sched, Scheduler, randn_tensor
 
 # 筛VAE里decoder里需要插入LoRA的层
 def filter_supported_modules(model):
@@ -157,10 +157,20 @@ class DiT_IC(nn.Module):
                 
         print("DiT-LoRA Done")
 
-    def forward(self, img, text_emb, img_emb):
+    def forward(self, img, text_emb = None, img_emb = None):
         latent_1 = self.vae.encode(img).latent * self.vae.config.scaling_factor
         latent_2 = self.E_aux((img + 1) / 2).detach()
         trans_log_variance, trans_y, y_aux, prompt, y_likelihoods, z_likelihoods = self.latent_codec(latent_1, latent_2)
+        if not hasattr(self, "_shape_debug_printed"):
+            print("img:", img.shape)
+            print("latent_1:", latent_1.shape)
+            print("latent_2:", latent_2.shape)
+            print("trans_log_variance:", trans_log_variance.shape)
+            print("trans_y:", trans_y.shape)
+            print("y_aux:", y_aux.shape)
+            print("prompt:", prompt.shape)
+            print("DiT in_channels:", self.DiT.config.in_channels)
+            self._shape_debug_printed = True
 
         latent_hat = trans_y # 该模式对应论文自蒸馏创新点
 

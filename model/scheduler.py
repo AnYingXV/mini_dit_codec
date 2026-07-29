@@ -43,11 +43,11 @@ def Adaptive(trans_log_variance):
 
 # 纯工具，从标准高斯里采样epsilon
 def randn_tensor(
-    shape: Union[Tuple, List],
-    generator: Optional[Union[List["torch.Generator"], "torch.Generator"]] = None,
-    device: Optional[Union[str, "torch.device"]] = None,
-    dtype: Optional["torch.dtype"] = None,
-    layout: Optional["torch.layout"] = None,
+    shape,
+    generator = None,
+    device = None,
+    dtype = None,
+    layout = None,
 ):
     """A helper function to create random tensors on the desired `device` with the desired `dtype`. When
     passing a list of generators, you can seed each batch size individually. If CPU generators are passed, the tensor

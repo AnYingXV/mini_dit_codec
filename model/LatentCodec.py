@@ -4,7 +4,7 @@ import torch.nn as nn
 
 from compressai.ans import BufferedRansEncoder, RansDecoder
 from compressai.entropy_models import EntropyBottleneck, GaussianConditional
-from utils_modules.modules import DepthConvBlock, ResidualBlockUpsample2, ResidualBlockWithStride2
+from utils.modules import DepthConvBlock, ResidualBlockUpsample2, ResidualBlockWithStride2
 
 SCALES_MIN = 0.11
 SCALES_MAX = 256
@@ -208,7 +208,7 @@ class latent_codec(nn.Module):
         super(latent_codec, self).__init__()
         context_dim = channel * 2
         self.ga = AnalysisTransform(ch_emd, channel)
-        self.gs = SynthesisTransform(channel, channel_out)
+        self.gs = SynthesisTransform(channel)
         self.gc = SpatialContext(in_ch=context_dim)
         self.ha = HyperAnalysis(channel)
         self.hs = HyperSynthesis(channel)
