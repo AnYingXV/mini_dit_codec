@@ -1,4 +1,5 @@
 import os
+import math
 import torch
 import pyiqa
 import argparse
@@ -14,6 +15,10 @@ from tqdm.auto import tqdm
 from model.losses import DiTICLosses
 from accelerate import Accelerator
 from torchvision import transforms
+
+from transformers import get_scheduler
+from diffusers.optimization import get_cosine_schedule_with_warmup
+
 from utils.flickr8k_dataset import Flickr8kSingleCaption
 from compressai.datasets import ImageFolder
 from transformers import CLIPModel, CLIPProcessor
@@ -205,8 +210,15 @@ def main(args):
     DISTS_loss.eval()
 
     trainable_params = [param for param in net.parameters() if param.requires_grad]
-    optimizer = torch.optim.AdamW(trainable_params, lr = 1e-4, betas = (0.9,0.999), weight_decay = 0.01, eps = 1e-8)
-    net, clip_model, optimizer, train_dataloader, LPIPS_loss, DISTS_loss = accelerator .prepare(net, clip_model, optimizer, train_dataloader, LPIPS_loss, DISTS_loss) # 把上面设置的所有训练用到的，全都丢给accelerator.prepare，他会自动设置/协调好和硬件的协作
+    optimizer = torch.optim.AdamW(trainable_params, lr = 1e-4, betas = (0.9,0.999), weight_decay = 0.0, eps = 1e-8)
+    lr_scheduler = get_scheduler(
+        name="constant_with_warmup",
+        optimizer=optimizer,
+        num_warmup_steps=700,
+        num_training_steps=args.max_train_steps,
+    )
+
+    net, clip_model, optimizer, train_dataloader, LPIPS_loss, DISTS_loss, lr_scheduler = accelerator.prepare(net, clip_model, optimizer, train_dataloader, LPIPS_loss, DISTS_loss, lr_scheduler) # 把上面设置的所有训练用到的，全都丢给accelerator.prepare，他会自动设置/协调好和硬件的协作
 
 
     #------------------------------------------------------------------ 训练loop ---------------------------------------------------------------
@@ -264,6 +276,12 @@ def main(args):
                 if accelerator.sync_gradients: # 判断当前步是否是参数更新步
                     accelerator.clip_grad_norm_(trainable_params, args.max_grad_norm) # 在参数更新步执行梯度剪裁
                 optimizer.step() # 更新参数
+                lr_scheduler.step()
+                with torch.no_grad():
+                    raw_net = accelerator.unwrap_model(net)
+                    raw_net.prompter.logit_scale.clamp_(
+                        max=math.log(100.0)
+                    )
                 optimizer.zero_grad(set_to_none=True) # 梯度清零
 
 
@@ -278,6 +296,14 @@ def main(args):
                     "train/dists": dists_loss.detach().item(),
                 }
                 accelerator.log(train_logs, step=train_steps)
+                accelerator.log({
+                    "train/logit_scale":
+                        accelerator.unwrap_model(net).prompter.logit_scale.item(),
+
+                    "train/logit_scale_exp":
+                        accelerator.unwrap_model(net).prompter.logit_scale.exp().item(),
+                }, step=train_steps)
+
 
                 if accelerator.is_main_process:
 

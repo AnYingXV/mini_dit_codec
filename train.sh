@@ -4,12 +4,12 @@ accelerate launch train.py \
     --elic_path /hdd/u202411103070/projects/img_research/all_checkpoints/ELIC/elic_official.pth \
     \
     --gradient_accumulation_steps 8 \
-    --mixed_precision bf16 \
+    --mixed_precision no \
     --seed 42 \
     --report_to tensorboard \
     \
-    --train_image_root /hdd/u202411103070/projects/datasets/flickr8k/images/Flicker8k_Dataset \
-    --train_caption_file /hdd/u202411103070/projects/datasets/flickr8k/texts/Flickr8k.token.txt \
+    --train_image_root /hdd/u202411103070/projects/datasets/mini_flickr8k/images/Flicker8k_Dataset \
+    --train_caption_file /hdd/u202411103070/projects/datasets/mini_flickr8k/texts/Flickr8k.token.txt \
     --test_dataset /hdd/u202411103070/projects/datasets \
     --train_patch_size 256 \
     --train_batch_size 4 \
@@ -18,7 +18,7 @@ accelerate launch train.py \
     --enable_xformers_memory_efficient_attention \
     --gradient_checkpointing \
     \
-    --max_train_steps 1000 \
+    --max_train_steps 6250 \
     --train_stage 1 \
     --checkpointing_steps 250 \
     --eval_freq 100 \

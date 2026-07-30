@@ -1,3 +1,4 @@
+import math
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
@@ -55,14 +56,14 @@ class LatentConditionAlignment(nn.Module):
         if self.if_train and (text_emb is not None or img_emb is not None):
             latent_mean = latent_prompt.mean(dim = 1) # [B, 2304]
             align_clip_latent = self.align_clip(latent_mean) # 将latent对齐到CLIP的维度
-            align_clip_latent = F.normalize(align_clip_latent, dim = -1)
+            align_clip_latent = F.normalize(align_clip_latent.float(), dim = -1, eps=1e-6)
 
             # 训练对齐目标——CLIP文本embedding
             clip_target = text_emb if text_emb is not None else img_emb
-            clip_target = F.normalize(clip_target.detach(), dim=-1)
-            logit_scale = self.logit_scale.exp()
+            clip_target = F.normalize(clip_target.detach().float(), dim=-1, eps=1e-6)
+            logit_scale = self.logit_scale.float().clamp(max = math.log(100.0)).exp()
 
-            latent_to_clip = logit_scale*align_clip_latent@clip_target.t()
+            latent_to_clip = logit_scale*(align_clip_latent.float()@clip_target.float().t())
             clip_to_latent = latent_to_clip.t()
             labels = torch.arange(B, device=latent.device)
 
@@ -192,7 +193,7 @@ class DiT_IC(nn.Module):
         output_image = self.vae.decode(x_denoised / self.vae.config.scaling_factor, return_dict=False)[0].clamp(-1, 1)
 
         # 0.05是该损失的权重，F.relu复制截断，m = 0.5，所以相似度达到0.5就停止对齐,loss一般是标量
-        distill_loss = 0.05*F.relu(1 - 0.5 - F.cosine_similarity(x_denoised, latent_1.detach())).mean()
+        distill_loss = 0.05*F.relu(1 - 0.5 - F.cosine_similarity(x_denoised.float(), latent_1.detach().float(), eps=1e-6)).mean()
 
         return output_image, clip_align_loss, distill_loss, y_likelihoods, z_likelihoods
 
