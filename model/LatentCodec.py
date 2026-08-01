@@ -433,7 +433,7 @@ class latent_codec(nn.Module):
 
         return {
             "strings" : [y_strings, z_strings],
-            "shape" : z.size()[-2:],
+            "z_shape" : z.size()[-2:],
         }
         
 
