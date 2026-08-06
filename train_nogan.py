@@ -514,12 +514,25 @@ def load_checkpoint(
     aux_optimizer: torch.optim.Optimizer,
     scheduler: LambdaLR,
     device: torch.device,
+    load_scheduler_state: bool = True,
 ) -> Tuple[int, Dict[str, Tensor]]:
+    """
+    Restore model, optimizer, auxiliary optimizer, EMA, and global step.
+
+    When ``load_scheduler_state`` is True, the checkpoint's original learning-
+    rate schedule is restored exactly. When it is False, the caller can rebuild
+    the learning-rate schedule from the current YAML after loading the
+    checkpoint. This is useful for beginning a new continuation stage with a
+    different LR or different milestones while retaining the learned weights
+    and AdamW momentum states.
+    """
     checkpoint = torch.load(path, map_location=device)
     model.load_state_dict(checkpoint["model"], strict=True)
     optimizer.load_state_dict(checkpoint["optimizer"])
     aux_optimizer.load_state_dict(checkpoint["aux_optimizer"])
-    scheduler.load_state_dict(checkpoint["scheduler"])
+
+    if load_scheduler_state:
+        scheduler.load_state_dict(checkpoint["scheduler"])
 
     ema_state = {
         name: tensor.to(device)
@@ -926,6 +939,9 @@ def train(
     train_steps = 0
 
     resume_path = train_cfg.get("resume")
+    reset_lr_schedule_on_resume = bool(
+        train_cfg.get("reset_lr_schedule_on_resume", False)
+    )
 
     if resume_path:
         resume_file = Path(resume_path)
@@ -937,7 +953,37 @@ def train(
             aux_optimizer,
             scheduler,
             device,
+            load_scheduler_state=not reset_lr_schedule_on_resume,
         )
+
+        if reset_lr_schedule_on_resume:
+            # The optimizer state restores AdamW moments and other state from
+            # the checkpoint, but its stored LR belongs to the old run. Replace
+            # only the main optimizer LR and scheduler position using the
+            # current YAML. All other training logic and optimizer state remain
+            # unchanged.
+            configured_base_lr = float(optim_cfg["lr"])
+            resume_factor = lr_lambda(train_steps)
+            resumed_lr = configured_base_lr * resume_factor
+
+            for param_group in optimizer.param_groups:
+                param_group["initial_lr"] = configured_base_lr
+                param_group["lr"] = resumed_lr
+
+            scheduler.base_lrs = [
+                configured_base_lr
+                for _ in optimizer.param_groups
+            ]
+            scheduler.last_epoch = train_steps
+            scheduler._last_lr = [
+                resumed_lr
+                for _ in optimizer.param_groups
+            ]
+
+            # Keep LambdaLR's internal step counter consistent enough for
+            # subsequent scheduler.step() calls without replaying old steps.
+            if hasattr(scheduler, "_step_count"):
+                scheduler._step_count = train_steps + 1
 
         if rank == 0:
             logger.info(
@@ -945,6 +991,23 @@ def train(
                 resume_file,
                 train_steps,
             )
+
+            if reset_lr_schedule_on_resume:
+                logger.info(
+                    "LR schedule rebuilt from current YAML: "
+                    "base_lr=%.6e, factor=%.6f, resumed_lr=%.6e, "
+                    "milestones=%s, gammas=%s",
+                    float(optim_cfg["lr"]),
+                    lr_lambda(train_steps),
+                    optimizer.param_groups[0]["lr"],
+                    milestones,
+                    gammas,
+                )
+            else:
+                logger.info(
+                    "LR schedule restored from checkpoint: current_lr=%.6e",
+                    optimizer.param_groups[0]["lr"],
+                )
 
     # ------------------------------------------------------------------
     # DDP

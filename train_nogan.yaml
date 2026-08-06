@@ -1,0 +1,83 @@
+# Flickr8k Stage-1 continuation training on one NVIDIA L40.
+#
+# Launch:
+#   torchrun --standalone --nproc_per_node=1 \
+#     train_nogan_lr_resume.py \
+#     --config train_ditic_resume_6k_to_12k.yaml
+
+data:
+  image_root: /hdd/u202411103070/projects/datasets/flickr8k/images/Flicker8k_Dataset
+  annotation_file: /hdd/u202411103070/projects/datasets/flickr8k/texts/Flickr8k.token.txt
+
+  validation_ratio: 0.125
+  split_seed: 903
+
+  # One caption per image avoids same-image false negatives in CLIP loss.
+  train_caption_indices: [0]
+
+  train_split_file: null
+  valid_split_file: null
+
+  patch_size: [256, 256]
+  num_workers: 8
+
+model:
+  dit_path: /hdd/u202411103070/projects/img_research/all_checkpoints/SANA
+  elic_path: /hdd/u202411103070/projects/img_research/all_checkpoints/ELIC/elic_official.pth
+
+  clip_text_model: /hdd/u202411103070/projects/img_research/all_checkpoints/CLIP
+  clip_text_output: projected
+  clip_max_length: 77
+
+train:
+  output_dir: /hdd/u202411103070/projects/img_research/mini_dit_codec/train_output/checkpoints
+  exp_name: flickr8k_stage1_step12k_bz16
+
+  global_seed: 903
+  global_batch_size: 16
+  valid_global_batch_size: 1
+  enable_validation: true
+
+  # The checkpoint contains train_steps=6000, so this continues for 6000 more
+  # optimizer steps and stops at global step 12000.
+  max_steps: 12000
+  log_every: 20
+  valid_every: 500
+  ckpt_every: 2000
+  ema_decay: 0.999
+
+  resume: /hdd/u202411103070/projects/img_research/mini_dit_codec/train_output/checkpoints/flickr8k_bz16_cap1_step6k/checkpoints/final.pt
+
+  # true:
+  #   restore model weights, EMA, AdamW moments, and auxiliary optimizer state,
+  #   but rebuild the main LR schedule from the current optimizer section.
+  # false:
+  #   restore the checkpoint's original scheduler and LR exactly.
+  reset_lr_schedule_on_resume: true
+
+optimizer:
+  # Base LR for this continuation schedule.
+  lr: 5.0e-5
+
+  aux_lr: 1.0e-3
+  beta2: 0.999
+  weight_decay: 0.0
+  max_grad_norm: 4.0
+
+  # Because the scheduler uses global train_steps and cumulative factors:
+  # step 6000-8999:  5e-5 * 0.5           = 2.5e-5
+  # step 9000-10999: 5e-5 * 0.5 * 0.5     = 1.25e-5
+  # step 11000+:     5e-5 * 0.5 * 0.5*0.4 = 5e-6
+  step_lr: [6000, 9000, 11000]
+  step_gamma: [0.5, 0.5, 0.4]
+
+loss:
+  lambda_rate: 0.5
+  lambda_mse: 1.0
+
+  lambda_lpips: 1.0
+  lpips_net: alex
+
+  lambda_dists: 1.0
+  lambda_distill: 1.0
+  lambda_cond: 1.0

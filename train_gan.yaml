@@ -1,0 +1,74 @@
+data:
+  image_root: /hdd/u202411103070/projects/datasets/flickr8k/images/Flicker8k_Dataset
+  annotation_file: /hdd/u202411103070/projects/datasets/flickr8k/texts/Flickr8k.token.txt
+  validation_ratio: 0.125
+  split_seed: 903
+  train_caption_indices: [0]
+  train_split_file: null
+  valid_split_file: null
+  patch_size: [256, 256]
+  num_workers: 8
+
+model:
+  dit_path: /hdd/u202411103070/projects/img_research/all_checkpoints/SANA
+  elic_path: /hdd/u202411103070/projects/img_research/all_checkpoints/ELIC/elic_official.pth
+  clip_text_model: /hdd/u202411103070/projects/img_research/all_checkpoints/CLIP
+  clip_text_output: projected
+  clip_max_length: 77
+
+train:
+  output_dir: /hdd/u202411103070/projects/img_research/mini_dit_codec/train_output/checkpoints
+  exp_name: flickr8k_stage1_step12k_bz16
+  global_seed: 903
+
+  # One NVIDIA L40 / one torchrun process.
+  global_batch_size: 16
+  valid_global_batch_size: 1
+  enable_validation: true
+
+  # This is the cumulative target step.
+  max_steps: 12000
+  log_every: 20
+  valid_every: 500
+  ckpt_every: 2000
+  ema_decay: 0.999
+
+  # Resume the stage-1 6000-step checkpoint. The discriminator is initialized
+  # from scratch because an old no-GAN checkpoint has no discriminator state.
+  resume: /hdd/u202411103070/projects/img_research/mini_dit_codec/train_output/checkpoints/flickr8k_bz16_cap1_step6k/checkpoints/final.pt
+
+optimizer:
+  # lr: 1.0e-4
+  lr: 5.0e-5
+  disc_lr: 1.0e-4
+  aux_lr: 1.0e-3
+  beta2: 0.999
+  beta_vae: [0.5, 0.9]
+  weight_decay: 0.0
+  disc_weight_decay: 0.0
+  max_grad_norm: 4.0
+  step_lr: [6000, 9000, 11000]
+  step_gamma: [0.5, 0.5, 0.4]
+
+loss:
+  lambda_rate: 0.5
+  lambda_mse: 1.0
+  lambda_lpips: 1.0
+  lpips_net: alex
+  lambda_dists: 1.0
+  lambda_distill: 1.0
+  lambda_cond: 1.0
+
+  # Stage-2 adversarial settings.
+  lambda_adv: 1.0
+  disc_start: 6900
+  disc_factor: 1.0
+  disc_weight: 1.0
+  adaptive_adv_weight: true
+  adaptive_weight_max: 10000.0
+
+  disc_loss: hinge
+  disc_in_channels: 3
+  disc_ndf: 64
+  disc_num_layers: 3
+  disc_use_actnorm: false
